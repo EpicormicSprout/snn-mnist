@@ -1,6 +1,6 @@
 # Neuromorphic Vision: Spiking Neural Networks on Kubernetes
 
-![Prediction Sample](assets/prediction_sample.gif)
+![Prediction Sample](assets/sample_0_True_0_Pred_0.gif)
 *A sample of the N-MNIST event stream being classified by the SNN.*
 
 ## Overview
