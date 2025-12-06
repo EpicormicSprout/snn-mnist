@@ -1,0 +1,101 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: neuromorphic-training-job
+spec:
+  template:
+    spec:
+      volumes:
+      - name: data-volume
+        emptyDir: {}
+      
+      # INIT CONTAINER: Downloads Data & Code from S3
+      initContainers:
+      - name: download-inputs
+        image: rclone/rclone:latest
+        resources:
+          limits: { memory: 1Gi, cpu: 1 }
+          requests: { memory: 1Gi, cpu: 1 }
+        env:
+        - name: ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: nautilus-s3-keys
+              key: access-key
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: nautilus-s3-keys
+              key: secret-key
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            export RCLONE_CONFIG_NRP_TYPE=s3
+            export RCLONE_CONFIG_NRP_PROVIDER=Ceph
+            export RCLONE_CONFIG_NRP_ENDPOINT=https://s3-west.nrp-nautilus.io
+            export RCLONE_CONFIG_NRP_ACCESS_KEY_ID=$ACCESS_KEY
+            export RCLONE_CONFIG_NRP_SECRET_ACCESS_KEY=$SECRET_KEY
+            
+            # Downloads dataset and script from S3 bucket
+            # Replace 'neuromorphic-project' with your specific bucket path
+            rclone copy nrp:neuromorphic-project /data -v
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+
+      # MAIN CONTAINER: Runs Training & Uploads Results
+      containers:
+      - name: gpu-container
+        image: pytorch/pytorch:latest
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: 16Gi
+            cpu: 4
+          requests:
+            nvidia.com/gpu: 1
+            memory: 16Gi
+            cpu: 4
+        env:
+        - name: ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: nautilus-s3-keys
+              key: access-key
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: nautilus-s3-keys
+              key: secret-key
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            cd /data
+            
+            echo "1. Installing Dependencies (Runtime)..."
+            pip install tonic snntorch matplotlib > /dev/null
+            apt-get update && apt-get install -y unzip curl > /dev/null
+            
+            echo "2. Unzipping Data..."
+            unzip -o -q Train.zip
+            unzip -o -q Test.zip
+            
+            echo "3. Starting Training..."
+            python train.py
+            
+            echo "4. Installing Rclone & Uploading Results..."
+            curl https://rclone.org/install.sh | bash > /dev/null
+            export RCLONE_CONFIG_NRP_TYPE=s3
+            export RCLONE_CONFIG_NRP_PROVIDER=Ceph
+            export RCLONE_CONFIG_NRP_ENDPOINT=https://s3-west.nrp-nautilus.io
+            export RCLONE_CONFIG_NRP_ACCESS_KEY_ID=$ACCESS_KEY
+            export RCLONE_CONFIG_NRP_SECRET_ACCESS_KEY=$SECRET_KEY
+            
+            # Upload model and visuals back to S3
+            rclone copy snn_model.pth nrp:neuromorphic-project/results/
+            rclone copy /data/visuals nrp:neuromorphic-project/results/visuals/
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+      
+      restartPolicy: Never
